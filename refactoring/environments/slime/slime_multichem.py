@@ -6,6 +6,7 @@ from pprint import pprint
 import time
 import cProfile
 import colorsys
+from copy import deepcopy
 
 import gymnasium as gym
 from gymnasium.spaces import Discrete, MultiBinary, Box
@@ -689,30 +690,33 @@ class SlimeMultipleChem(AECEnv):
         Same compuation as avg_cluster.
         Use THIS for calculating the average, avg_cluster has a bug!
         """
-        cluster_sizes = []  # registra la dim. dei cluster
+        cluster_sizes = {i: list() for i in range(self.n_chemicals)}  # record cluster dim by type of chemical
         for l in self.learners:
-            cluster = []  # tiene conto di quali turtle sono in quel cluster
+            cluster = {i: list() for i in range(self.n_chemicals)}  # tiene conto di quali turtle sono in quel cluster
             for p in self.cluster_patches[self.learners[l]['pos']]:
                 for t in self.patches[p]['turtles']:
-                    cluster.append(t)
+                    cluster[self.learners[t]['type']].append(t)
             #cluster.sort()
-            if cluster not in cluster_sizes:
-                cluster_sizes.append(cluster)
+            for typ, cl in cluster.items():
+                if cl not in cluster_sizes[typ]:
+                    cluster_sizes[typ].append(cl)
         
-        cs = cluster_sizes.copy()
-        for i in range(len(cluster_sizes)):
-            for j in range(i + 1, len(cluster_sizes)):
-                set1 = set(cluster_sizes[j])
-                set2 = set(cluster_sizes[i])
-                if set1.issubset(set2) and cluster_sizes[j] in cs:
-                    cs.remove(cluster_sizes[j])
-                elif set2.issubset(set1) and cluster_sizes[i] in cs:
-                    cs.remove(cluster_sizes[i])
+        cs = deepcopy(cluster_sizes)
+        for cluster_type, cl in cluster_sizes.items():
+            for i in range(len(cl)):
+                for j in range(i + 1, len(cl)):
+                    set1 = set(cl[j])
+                    set2 = set(cl[i])
+                    if set1.issubset(set2) and cl[j] in cs[cluster_type]:
+                        cs[cluster_type].remove(cl[j])
+                    elif set2.issubset(set1) and cl[i] in cs[cluster_type]:
+                        cs[cluster_type].remove(cl[i])
         # calcolo avg_cluster_size
-        somma = 0
-        for cluster in cs:
-            somma += len(cluster)
-        avg_cluster_size = somma / len(cs)
+        avg_cluster_size = {typ: 0.0 for typ in cs.keys()}
+        for typ, cluster in cs.items():
+            for cl in cluster:
+                avg_cluster_size[typ] += len(cl)
+            avg_cluster_size[typ] /= len(cluster)
         return avg_cluster_size
 
     def _check_chemical(self, current_agent):
