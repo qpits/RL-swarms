@@ -855,6 +855,7 @@ class SlimeMultipleChem(AECEnv):
 
 
 import pygame
+import colorsys
 
 BLACK = (0, 0, 0)
 BLUE = (0, 0, 255)
@@ -891,7 +892,8 @@ class SlimeVisualizer:
         # sample one color for each chemical. also for agents
         n_chems = kwargs['N_CHEMICALS']
         rnd = np.random.default_rng()
-        self.chem_colors = rnd.integers(0, 255, size=(n_chems, 3), endpoint=True)
+        # build chem_colors in HLS [0,1] float. start with pure hues -> select random hues
+        self.chem_colors = rnd.random(n_chems)
         self.agent_colors = [tuple(random.randint(10, 255) for _ in range(3)) for _ in range(n_chems)]
 
     def render(
@@ -915,7 +917,7 @@ class SlimeVisualizer:
             patch_color = self._compute_patch_color(patches[p]['chemical'])
             pygame.draw.rect(
                 self.screen,
-                tuple(patch_color),
+                patch_color,
                 pygame.Rect(
                     p[0] - self.offset,
                     p[1] - self.offset,
@@ -951,11 +953,21 @@ class SlimeVisualizer:
         Computes color of a patch based on the quantity of each pheromone
         """
         tot_pher = np.sum(pheromones)
-        pher_perc = np.zeros_like(pheromones)
         if tot_pher > 0.0:
-            pher_perc = pheromones / np.sum(pheromones)
-        scaled_colors = (self.chem_colors * pher_perc[:, np.newaxis])
-        return np.round(np.sum(scaled_colors, axis=0)).astype(np.int32)
+            # get pheromone with highest quantity
+            highest_p = np.argmax(pheromones)
+            # saturation should be zero when all pheromones are the same
+            scaled_saturation = pheromones[highest_p] / tot_pher - 1./pheromones.shape[0]
+            selected_hue = self.chem_colors[highest_p]
+            # scale value based on total amount of pheromone
+            scaled_value = np.clip(tot_pher / self.shade_strength, 0., 1.)
+        else:
+            # no pheromone -> black
+            selected_hue = 0.0
+            scaled_value = 0.0
+            scaled_saturation = 0.0
+        rgb = colorsys.hsv_to_rgb(selected_hue, scaled_saturation, scaled_value)
+        return (int(round(rgb[0]*255)), int(round(rgb[1]*255)), int(round(rgb[2]*255)))
 
 def main():
     params = {
