@@ -2,6 +2,8 @@
 import random
 import numpy as np
 from tqdm import tqdm
+from refactoring.agents.utils.iql_logging import IQLCollector
+
 
 def train(
         env, 
@@ -28,14 +30,17 @@ def train(
     old_s = {}  # DOC old state for each agent {agent: old_state}
     old_a = {}
 
+    data = IQLCollector(env, action_dict, actions_dict, reward_dict, qtable)
+    data.ticks_per_episode = params['episode_ticks']
+
     for ep in tqdm(range(1, train_episodes + 1), desc="EPISODES", colour='red', position=0, leave=False):
         env.reset()
-        
+        data.episode = ep    
         for tick in tqdm(range(1, params['episode_ticks'] + 1), desc="TICKS", colour='green', position=1, leave=False):
             for agent in env.agent_iter(max_iter=env.get_learner_population()):
                 cur_state, reward, _, _, _ = env.last(agent)
                 cur_s = env.convert_observation(cur_state)
-                
+                data.agent = agent
                 if ep == 1 and tick == 1:
                     #action = env.action_space(agent).sample()
                     action = np.random.randint(0, n_actions)
@@ -71,30 +76,10 @@ def train(
             epsilon = max(epsilon - (1 - decay), epsilon_min)
         
         if ep % train_log_every == 0:
-            avg_rew = round((sum(reward_dict[str(ep)].values()) / params["episode_ticks"]) / env.get_learner_population(), 2)
-            avg_cluster = round(env.avg_cluster2(), 2)
-            eps = round(epsilon, 4)
-            value = [ep, tick * ep, avg_cluster, avg_rew]
-            value.extend(list(actions_dict[str(ep)].values()))
-            value.append(eps)
-            logger.load_value(value)
-            
-            #print(f"\nEPISODE: {ep}")
-            #print(f"\tEpsilon: {round(epsilon, 2)}")
-            #print("\tCluster metrics up to now:")
-            #print("\t  - avg cluster in this episode: ", cluster_dict[str(ep)])
-            #print("\t  - avg cluster: ", avg_cluster)
-            #print("\t  - avg cluster std: ", std_cluster)
-            #print("\t  - min cluster: ", min_cluster)
-            #print("\t  - max cluster: ", max_cluster)
-            #print("\tReward metrics up to now:")
-            #print("\t  - avg reward in this episode: ", avg_reward_dict[str(ep)])
-            #print("\t  - avg reward: ", avg_reward)
-            #print("\t  - avg reward std: ", std_reward)
-            #print("\t  - min reward: ", min_reward)
-            #print("\t  - max reward: ", max_reward)
+            data.epsilon = epsilon
+            logger.collect(data)
 
-    logger.empty_table()
+    logger.log()
     env.close()
     if visualizer != None:
         visualizer.close()
@@ -115,14 +100,16 @@ def eval(
         visualizer=None
     ):
     # DOC Evaluate agent's performance after Q-learning
-    #n_actions = env.actions_n()
-
+    data = IQLCollector(env, action_dict, actions_dict, reward_dict, qtable)
+    data.ticks_per_episode = params['episode_ticks']
     print("Start testing...\n")
     
     for ep in tqdm(range(1, test_episodes + 1), desc="EPISODES", colour='red', leave=False):
         env.reset()
+        data.episode = ep
         for tick in tqdm(range(1, params['episode_ticks'] + 1), desc="TICKS", colour='green', leave=False):
             for agent in env.agent_iter(max_iter=env.get_learner_population()):
+                data.agent = agent
                 state, reward, _, _, _ = env.last(agent)
                 s = env.convert_observation(state)
                 action = np.argmax(qtable[int(agent)][s])
@@ -140,13 +127,9 @@ def eval(
                 )
         
         if ep % test_log_every == 0:
-            avg_rew = round((sum(reward_dict[str(ep)].values()) / params["episode_ticks"]) / env.get_learner_population(), 2)
-            avg_cluster = round(env.avg_cluster2(), 2)
-            value = [ep, tick * ep, avg_cluster, avg_rew]
-            value.extend(list(actions_dict[str(ep)].values()))
-            logger.load_value(value)
-    
-    logger.empty_table()
+            logger.collect(data)
+
+    logger.log()
     env.close()
     if visualizer != None:
         visualizer.close()
