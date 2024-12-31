@@ -276,6 +276,127 @@ class SlimeMultipleChem(AECEnv):
         """
         return x % self.W_pixels, y % self.H_pixels
 
+    def _find_pheromone_gradient(self, agent, ph_type="own", max_grad=True):
+        """
+        Finds the patch with greatest gradient with respect to the agent's position
+
+        :param ph_type: "own" will return the max corresponding to agent's pheromone type; "other" will return the max of the sum of all the other types of pheromones, except the agent's one
+        :param max_grad: True if we wish to follow the gradient (go towards max), False otherwise.
+        """
+        turtle_ph_type = self.learners[agent]['type']
+        pos = self.learners[agent]['pos']
+        match ph_type:
+            case "own":
+                pheromone_quantity = lambda ph: ph[turtle_ph_type]
+            case "other":
+                pheromone_quantity = lambda ph: np.sum(np.delete(ph, turtle_ph_type))
+            case _:
+                raise ValueError(f"Invalid pheromone selector: {ph_type}")
+        smell_patches_here = self.smell_patches[pos]
+        np_rng = np.random.default_rng()
+        pheromones = np.array([pheromone_quantity(self.patches[p]['chemical']) for p in smell_patches_here])
+        if self.follow_mode == "prob":
+            if np.all(pheromones == 0.):
+                weights = None
+            else:
+                # very simple: if we want to follow the minimum, just take the complementary probabilities
+                weights = (-1. * max_grad)*(pheromones / np.sum(pheromones)) + (1.0 * max_grad)
+            selected = np_rng.choice(len(smell_patches_here), p=weights)
+            max_ph = pheromones[selected]
+            winner_patch = smell_patches_here[selected]
+        elif self.follow_mode == "det":
+            if max_grad:
+                grad_op = np.argmax
+            else:
+                grad_op = np.argmin
+            selected = grad_op(pheromones)
+            max_ph = pheromones[selected]
+            winner_patch = smell_patches_here[selected]
+        else:
+            raise ValueError(f"Invalid follow_mode: {self.follow_mode}")
+        return max_ph, winner_patch
+
+    
+    def _take_action(self, agent, action):
+        action_str = self.actions[action]
+
+        match action_str:
+            case 'walk':
+                self._walk(agent)
+            case 'lay_pheromone':
+                self._lay_pheromone(agent)
+            case 'follow_own_pheromone':
+                self._follow_own_pheromone(agent)
+            case 'run_away_own_pheromone':
+                self._run_away_own_pheromone(agent)
+            case 'follow_other_pheromone':
+                self._follow_other_pheromone(agent)
+            case 'run_away_other_pheromone':
+                self._run_away_other_pheromone(agent)
+            case _:
+                raise ValueError("Action out of range!")
+    
+    def _move_agent(self, agent, target_patch, pheromone):
+        if pheromone >= self.sniff_threshold:
+            turtle = self.learners[agent]
+            self.patches[turtle['pos']]['turtles'].remove(agent)
+            turtle['pos'] = target_patch
+            self.patches[target_patch]['turtles'].append(agent)
+
+    def _walk(self, agent):
+        """
+        Move in random direction (8 sorrounding cells)
+        """
+        turtle = self.learners[agent]
+        choice = [self.patch_size, -self.patch_size, 0]
+        x, y = turtle['pos']
+        self.patches[turtle['pos']]['turtles'].remove(agent)
+        x_rnd = np.random.choice(choice)
+        y_rnd = np.random.choice(choice)
+        x2, y2 = x + x_rnd, y + y_rnd
+        x2, y2 = self._wrap(x2, y2)
+        
+        turtle['pos'] = (x2, y2)
+        self.patches[turtle['pos']]['turtles'].append(agent)
+    
+    def _lay_pheromone(self, agent):
+        """
+        Lay 'lay_amount' pheromone of type 'type' in square 'area' centred in 'pos'
+        """
+        ph_type = self.learners[agent]['type']
+        pos = self.learners[agent]['pos']
+        for p in self.lay_patches[pos]:
+            self.patches[p]['chemical'][ph_type] += self.lay_amount
+
+    def _follow_own_pheromone(self, agent):
+        """
+        Follow the scent of my pheromone type, ignoring the others
+        """
+        pheromone, target_patch = self._find_pheromone_gradient(agent)
+        self._move_agent(agent, target_patch, pheromone)
+
+    def _run_away_own_pheromone(self, agent):
+        """
+        Run away from the scent of this agent's pheromone type, ignoring the others
+        """
+        pheromone, target_patch = self._find_pheromone_gradient(agent, "own", False)
+        self._move_agent(agent, target_patch, pheromone)
+    
+    def _follow_other_pheromone(self, agent):
+        """
+        Follow the scent of pheromone types different from this agent's one. We consider the sum of all the other pheromones, not just one in particular
+        """
+        pheromone, target_patch = self._find_pheromone_gradient(agent, "other")
+        self._move_agent(agent, target_patch, pheromone)
+
+    def _run_away_other_pheromone(self, agent):
+        """
+        Run away from the scent of pheromone types different from this agent's one. We consider the sum of all the other pheromones, not just one in particular
+        """
+        pheromone, target_patch = self._find_pheromone_gradient(agent, "other", False)
+        self._move_agent(agent, target_patch, pheromone)
+
+
     # learners act
     def step(self, action: int):
         if(self.terminations[self.agent_selection] or self.truncations[self.agent_selection]):
@@ -290,43 +411,13 @@ class SlimeMultipleChem(AECEnv):
             self.rewards_cust,
         )
         
-        if action == 0:     # Walk
-            self.patches, self.learners[self.agent] = self.walk(self.patches, self.learners[self.agent])
-        elif action == 1:   # Lay pheromone
-            self.patches = self.lay_pheromone(self.patches, self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-        elif action == 2:   # Follow pheromone
-            max_pheromone, max_coords = self._find_max_pheromone(self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-            if max_pheromone >= self.sniff_threshold:
-                self.patches = self.follow_pheromone(self.patches, max_coords, self.learners[self.agent])
-            else:
-                self.patches, self.learners[self.agent] = self.walk(self.patches, self.learners[self.agent])
-        elif action == 3:   # Don't follow pheromone
-            max_pheromone, max_coords = self._find_max_pheromone(self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-            if max_pheromone >= self.sniff_threshold:
-                self.patches = self.run_away_pheromone(self.patches, max_coords, self.learners[self.agent])
-            else:
-                self.patches, self.learners[self.agent] = self.walk(self.patches, self.learners[self.agent])
-        elif action == 4:   # Lay pheromone and walk
-            self.patches, self.learners[self.agent] = self.walk(self.patches, self.learners[self.agent])
-            self.patches = self.lay_pheromone(self.patches, self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-        elif action == 5:   # Lay pheromone and follow pheromone
-            max_pheromone, max_coords = self._find_max_pheromone(self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-            if max_pheromone >= self.sniff_threshold:
-                self.patches = self.follow_pheromone(self.patches, max_coords, self.learners[self.agent])
-            else:
-                self.patches, self.learners[self.agent] = self.walk(self.patches, self.learners[self.agent])
-            self.patches = self.lay_pheromone(self.patches, self.learners[self.agent]['pos'], self.learners[self.agent]['type'])
-        else:
-            raise ValueError("Action out of range!")
+        self._take_action(self.agent, action)
 
         if self._agent_selector.is_last():
             for ag in self.agents:
                 self.rewards[ag] = self.rewards_cust[self.agent_name_mapping[ag]][-1]
             if len(self.turtles) > 0:
                 self.turtles, self.patches = self.move(self.turtles, self.patches)
-            #self.patches = self._diffuse(self.patches)
-            #self.patches = self._diffuse2(self.patches)
-            #self.patches = self._evaporate(self.patches)
             self.patches = self._diffuse_and_evaporate(self.patches)
         else:
             self._clear_rewards()
@@ -334,23 +425,6 @@ class SlimeMultipleChem(AECEnv):
         self.agent_selection = self._agent_selector.next()
         self._cumulative_rewards[str(self.agent)] = 0
         self._accumulate_rewards()
-        
-    """
-    def move(self, turtles, patches):
-        for turtle in turtles:
-            pos = turtles[turtle]['pos']
-            t = turtles[turtle]
-            max_pheromone, max_coords = self._find_max_pheromone(patches, pos)
-
-            if max_pheromone >= self.sniff_threshold:
-                patches = self.follow_pheromone(patches, max_coords, t, turtle)
-            else:
-                patches, turtle = self.walk(patches, t, turtle)
-
-            patches = self.lay_pheromone(patches, turtles[turtle]['pos'])
-
-        return turtles, patches 
-    """
 
     def process_agent(self, cluster_ticks, rewards_cust):
         """
@@ -380,17 +454,6 @@ class SlimeMultipleChem(AECEnv):
             observations = np.array([cluster >= self.cluster_threshold, chemical])
 
         return observations, cluster_ticks, rewards_cust
-
-    '''
-    def get_obs(self, pos):
-        obs_patches = [
-            self._wrap(r, c)
-            for r in range(pos[0] - self.patch_size, pos[0] + 2 * self.patch_size, self.patch_size)
-            for c in range(pos[1] - self.patch_size, pos[1] + 2 * self.patch_size, self.patch_size)
-        ]
-        obs_patches.remove(pos)
-        return np.array([self.patches[o]["chemical"] for o in obs_patches])
-    '''
 
     def _get_obs(self, agent):
         """
