@@ -39,7 +39,7 @@ def train(
         for tick in tqdm(range(1, params['episode_ticks'] + 1), desc="TICKS", colour='green', position=1, leave=False):
             for agent in env.agent_iter(max_iter=env.get_learner_population()):
                 cur_state, reward, _, _, _ = env.last(agent)
-                cur_s = env.convert_observation(cur_state)
+                cur_s = env.convert_observation(cur_state, int(agent))
                 data.agent = agent
                 if ep == 1 and tick == 1:
                     #action = env.action_space(agent).sample()
@@ -111,7 +111,7 @@ def eval(
             for agent in env.agent_iter(max_iter=env.get_learner_population()):
                 data.agent = agent
                 state, reward, _, _, _ = env.last(agent)
-                s = env.convert_observation(state)
+                s = env.convert_observation(state, int(agent))
                 action = np.argmax(qtable[int(agent)][s])
                 env.step(action)
                 

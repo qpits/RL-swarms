@@ -50,3 +50,7 @@ def avg_neighbourhood_entropy_log(data):
 
 def episode_log(data):
     return {"ep": data.episode}
+
+def actions_log(data):
+    actions_ep = list(data.actions_dict[str(data.episode)].values())
+    return {action: val for action, val in zip(data.environment.actions, actions_ep)}

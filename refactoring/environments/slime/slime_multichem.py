@@ -34,7 +34,8 @@ class SlimeMultipleChem(AECEnv):
             if isinstance(self.observation_space('0'), MultiBinary):
                 return self.observation_space('0').n
             elif isinstance(self.observation_space('0'), Box):
-                return self.observation_space('0').shape[0]
+                # observe maximum for agent's pheromone type and for the sum of all other types
+                return self.observation_space('0').shape[0] ** 2
 
     def actions_n(self, same_actions=True):
         if same_actions:
@@ -461,26 +462,37 @@ class SlimeMultipleChem(AECEnv):
         The array indicates the pheromone values in the 8 patches around the agent.
         """
         pos = agent['pos']
-        chem_type = agent['type']
         field_of_view = [
             self._wrap(r, c)
             for r in range(pos[0] - self.patch_size, pos[0] + 2 * self.patch_size, self.patch_size)
             for c in range(pos[1] - self.patch_size, pos[1] + 2 * self.patch_size, self.patch_size)
         ]
         field_of_view.remove(pos)
-        obs = np.array([self.patches[f]["chemical"][chem_type] for f in field_of_view])
-        return obs 
+        obs = np.array([self.patches[f]["chemical"] for f in field_of_view])
+        return obs
 
-    def convert_observation(self, obs):
+    def convert_observation(self, obs, agent):
         """
         This method returns the conversion of the observation to an integer.
         It's useful for IQL.
         """
         if self.obs_type == "paper":
-            if np.unique(obs).shape[0] == 1:
-                obs_id = np.random.randint(8)
+            rng = np.random.default_rng()
+            chem_type = self.learners[agent]['type']
+            n_patches = obs.shape[0]    # number of patches observed
+            obs = obs.transpose(1,0)
+            own_chem_obs = obs[chem_type]
+            other_chem_obs = np.sum(np.delete(obs, chem_type, axis=0), axis=0)
+            if np.unique(own_chem_obs).shape[0] == 1:
+                max_own = rng.integers(n_patches)
             else:
-                obs_id = obs.argmax().item()
+                max_own = np.argmax(own_chem_obs).item()
+            if np.unique(other_chem_obs).shape[0] == 1:
+                max_other = rng.integers(n_patches)
+            else:
+                max_other = np.argmax(other_chem_obs).item()
+                # found the id of the cell with max of "own" pheromone and id of cell with max of "other" -> get single id by "flattening" to the 64 possible combinations
+            obs_id = max_own + n_patches*max_other
         elif self.obs_type == "variation_1":
             obs_id = int(f"{obs[0].astype(np.uint8)}{obs[1].astype(np.uint8)}", 2)
         return obs_id
@@ -834,6 +846,21 @@ class SlimeMultipleChem(AECEnv):
         cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
                      (cluster / self.cluster_threshold) * (self.reward ** 2) + \
                      (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty)
+
+        rewards_cust[self.agent].append(cur_reward)
+        return cluster_ticks, rewards_cust, cur_reward
+
+    def reward_cluster_and_time_punish_time(self, cluster_ticks, rewards_cust, cluster, n_others):
+        """
+        Clustering reward that gives a penalty based on number of agents of different type in neighbourhood
+        """
+        if cluster >= self.cluster_threshold:
+            cluster_ticks[self.agent] += 1
+
+        cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
+                     (cluster / self.cluster_threshold) * (self.reward ** 2) + \
+                     (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty) + \
+                     n_others * self.penalty
 
         rewards_cust[self.agent].append(cur_reward)
         return cluster_ticks, rewards_cust, cur_reward
