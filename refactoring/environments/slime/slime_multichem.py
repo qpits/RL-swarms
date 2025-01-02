@@ -92,6 +92,7 @@ class SlimeMultipleChem(AECEnv):
 
         np.random.seed(seed)
         random.seed(seed)
+        self._np_rng = np.random.default_rng()
         
         self.population = kwargs['population']
         self.learner_population = kwargs['learner_population']
@@ -192,6 +193,14 @@ class SlimeMultipleChem(AECEnv):
         self.agent_name_mapping = dict(
             zip(self.possible_agents, list(range(self.population, pop_tot)))
         )
+
+
+        # special case to handle 2 types of pheromone in some conditions. for performance reasons
+        # avoid applying heavy numpy functions that would do nothing to 1-D arrays
+        if self.n_chemicals == 2:
+            self.__other_pheromones_get = lambda ph, ph_type: ph[1 - ph_type]
+        else:
+            self.__other_pheromones_get = lambda ph, ph_type: np.sum(np.delete(ph, ph_type))
     
     def get_learner_population(self):
         """
@@ -288,21 +297,20 @@ class SlimeMultipleChem(AECEnv):
         pos = self.learners[agent]['pos']
         match ph_type:
             case "own":
-                pheromone_quantity = lambda ph: ph[turtle_ph_type]
+                pheromone_quantity = lambda ph, chem_type: ph[chem_type]
             case "other":
-                pheromone_quantity = lambda ph: np.sum(np.delete(ph, turtle_ph_type))
+                pheromone_quantity = self.__other_pheromones_get
             case _:
                 raise ValueError(f"Invalid pheromone selector: {ph_type}")
         smell_patches_here = self.smell_patches[pos]
-        np_rng = np.random.default_rng()
-        pheromones = np.array([pheromone_quantity(self.patches[p]['chemical']) for p in smell_patches_here])
+        pheromones = np.array([pheromone_quantity(self.patches[p]['chemical'], turtle_ph_type) for p in smell_patches_here])
         if self.follow_mode == "prob":
             if np.all(pheromones == 0.):
                 weights = None
             else:
                 # very simple: if we want to follow the minimum, just take the complementary probabilities
                 weights = (-1. * max_grad)*(pheromones / np.sum(pheromones)) + (1.0 * max_grad)
-            selected = np_rng.choice(len(smell_patches_here), p=weights)
+            selected = self._np_rng.choice(len(smell_patches_here), p=weights)
             max_ph = pheromones[selected]
             winner_patch = smell_patches_here[selected]
         elif self.follow_mode == "det":
@@ -477,18 +485,17 @@ class SlimeMultipleChem(AECEnv):
         It's useful for IQL.
         """
         if self.obs_type == "paper":
-            rng = np.random.default_rng()
             chem_type = self.learners[agent]['type']
             n_patches = obs.shape[0]    # number of patches observed
             obs = obs.transpose(1,0)
             own_chem_obs = obs[chem_type]
-            other_chem_obs = np.sum(np.delete(obs, chem_type, axis=0), axis=0)
+            other_chem_obs = self.__other_pheromones_get(obs, chem_type)
             if np.unique(own_chem_obs).shape[0] == 1:
-                max_own = rng.integers(n_patches)
+                max_own = self._np_rng.integers(8)
             else:
                 max_own = np.argmax(own_chem_obs).item()
             if np.unique(other_chem_obs).shape[0] == 1:
-                max_other = rng.integers(n_patches)
+                max_other = self._np_rng.integers(8)
             else:
                 max_other = np.argmax(other_chem_obs).item()
                 # found the id of the cell with max of "own" pheromone and id of cell with max of "other" -> get single id by "flattening" to the 64 possible combinations
