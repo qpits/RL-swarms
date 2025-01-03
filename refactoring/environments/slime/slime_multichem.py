@@ -35,7 +35,8 @@ class SlimeMultipleChem(AECEnv):
                 return self.observation_space('0').n
             elif isinstance(self.observation_space('0'), Box):
                 # observe maximum for agent's pheromone type and for the sum of all other types
-                return self.observation_space('0').shape[0] ** 2
+                # include also the case in which there is NO pheromone, so no maximum.
+                return (self.observation_space('0').shape[0] + 1) ** 2
 
     def actions_n(self, same_actions=True):
         if same_actions:
@@ -486,16 +487,16 @@ class SlimeMultipleChem(AECEnv):
         """
         if self.obs_type == "paper":
             chem_type = self.learners[agent]['type']
-            n_patches = obs.shape[0]    # number of patches observed
+            n_patches = obs.shape[0] + 1   # number of patches observed + case of no pheromone
             obs = obs.transpose(1,0)
             own_chem_obs = obs[chem_type]
             other_chem_obs = self.__other_pheromones_get(obs, chem_type)
             if np.unique(own_chem_obs).shape[0] == 1:
-                max_own = self._np_rng.integers(8)
+                max_own = 8
             else:
                 max_own = np.argmax(own_chem_obs).item()
             if np.unique(other_chem_obs).shape[0] == 1:
-                max_other = self._np_rng.integers(8)
+                max_other = 8
             else:
                 max_other = np.argmax(other_chem_obs).item()
                 # found the id of the cell with max of "own" pheromone and id of cell with max of "other" -> get single id by "flattening" to the 64 possible combinations
