@@ -202,6 +202,10 @@ class SlimeMultipleChem(AECEnv):
             self.__other_pheromones_get = lambda ph, ph_type: ph[1 - ph_type]
         else:
             self.__other_pheromones_get = lambda ph, ph_type: np.sum(np.delete(ph, ph_type))
+
+        # experimental
+        self.pen_mod = kwargs['pen_mod']
+        self.conc_threshold = kwargs['conc_threshold']
     
     def get_learner_population(self):
         """
@@ -491,6 +495,14 @@ class SlimeMultipleChem(AECEnv):
             obs = obs.transpose(1,0)
             own_chem_obs = obs[chem_type]
             other_chem_obs = self.__other_pheromones_get(obs, chem_type)
+            # mask pheromones in case relative concentration drops below a threshold
+            # avoid division by zero!
+            eps = np.finfo(obs.dtype).eps
+            # should be sufficient to avoid any strange behaviour and get 1. when both are 0.
+            own_over_other = (own_chem_obs + eps) / (other_chem_obs + eps)
+            other_over_own = 1./own_over_other
+            own_chem_obs[own_over_other < self.conc_threshold] = 0.
+            other_chem_obs[other_over_own < self.conc_threshold] = 0.
             if np.unique(own_chem_obs).shape[0] == 1:
                 max_own = 8
             else:
