@@ -87,6 +87,8 @@ class SlimeMultipleChem(AECEnv):
         :param CLUSTER_FONT_SIZE:   Font size of cluster number (for overlapping agents)
         :param CHEMICAL_FONT_SIZE:  Font size of phermone amount (if SHOW_CHEM_TEXT is true)
         :param render_mode:
+
+        :param pen_mod:             Experimental penalty modifier (when near agents of different type)
         """
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -447,7 +449,7 @@ class SlimeMultipleChem(AECEnv):
         cluster = self._compute_cluster(self.agent)
 
         if self.reward_type == "cluster":
-            cluster_ticks, rewards_cust, cur_reward = self.reward_cluster_and_time_punish_time(
+            cluster_ticks, rewards_cust, cur_reward = self.reward_cluster_and_time_punish_time_and_other_clustertime_acc(
                 cluster_ticks,
                 rewards_cust,
                 cluster
@@ -870,12 +872,19 @@ class SlimeMultipleChem(AECEnv):
         rewards_cust[self.agent].append(cur_reward)
         return cluster_ticks, rewards_cust, cur_reward
 
-    def reward_cluster_and_time_punish_time(self, cluster_ticks, rewards_cust, cluster, n_others):
+    def reward_cluster_and_time_punish_time_and_others(self, cluster_ticks, rewards_cust, cluster):
         """
         Clustering reward that gives a penalty based on number of agents of different type in neighbourhood
         """
         if cluster >= self.cluster_threshold:
             cluster_ticks[self.agent] += 1
+
+        pos = self.learners[self.agent]['pos']
+        ph_type = self.learners[self.agent]['type']
+        n_others = 0
+        for p in self.cluster_patches[pos]:
+            for turtle in self.patches[p]['turtles']:
+                n_others += (self.learners[turtle]['type'] != ph_type)
 
         cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
                      (cluster / self.cluster_threshold) * (self.reward ** 2) + \
@@ -884,7 +893,56 @@ class SlimeMultipleChem(AECEnv):
 
         rewards_cust[self.agent].append(cur_reward)
         return cluster_ticks, rewards_cust, cur_reward
-    
+
+    def reward_cluster_and_time_punish_time_and_other_clustertime(self, cluster_ticks, rewards_cust, cluster):
+        """
+        Clustering reward that gives a penalty based on ticks spent with any agents of different type in neighbourhood
+        """
+        if cluster >= self.cluster_threshold:
+            cluster_ticks[self.agent] += 1
+
+        pos = self.learners[self.agent]['pos']
+        ph_type = self.learners[self.agent]['type']
+        n_others = 0
+        for p in self.cluster_patches[pos]:
+            for turtle in self.patches[p]['turtles']:
+                n_others += (self.learners[turtle]['type'] != ph_type)
+
+        self.other_cluster_ticks[self.agent] += n_others > 0
+
+        cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
+                     (cluster / self.cluster_threshold) * (self.reward ** 2) + \
+                     (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty) + \
+                     (self.other_cluster_ticks[self.agent] / self.episode_ticks) * self.pen_mod * self.penalty
+
+        rewards_cust[self.agent].append(cur_reward)
+        return cluster_ticks, rewards_cust, cur_reward
+
+    def reward_cluster_and_time_punish_time_and_other_clustertime_acc(self, cluster_ticks, rewards_cust, cluster):
+        """
+        Clustering reward that gives a penalty based on ticks spent with any agents of different type in neighbourhood
+        Ticks are accumulated: subtract one tick when no rival agents are around, otherwise add one tick
+        """
+        if cluster >= self.cluster_threshold:
+            cluster_ticks[self.agent] += 1
+
+        pos = self.learners[self.agent]['pos']
+        ph_type = self.learners[self.agent]['type']
+        n_others = 0
+        for p in self.cluster_patches[pos]:
+            for turtle in self.patches[p]['turtles']:
+                n_others += (self.learners[turtle]['type'] != ph_type)
+        
+        self.other_cluster_ticks[self.agent] += 1 - 2 * (n_others > 0)
+
+        cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
+                     (cluster / self.cluster_threshold) * (self.reward ** 2) + \
+                     (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty) + \
+                     (self.other_cluster_ticks[self.agent] / self.episode_ticks) * self.pen_mod * self.penalty
+
+        rewards_cust[self.agent].append(cur_reward)
+        return cluster_ticks, rewards_cust, cur_reward
+
     def reward_scatter_and_time_punish_time(self, cluster_ticks, rewards_cust, cluster):
         """
         The scattering reward used in the article.
@@ -907,6 +965,7 @@ class SlimeMultipleChem(AECEnv):
         pop_tot = self.population + sum(self.learner_population)
         self.rewards_cust = {i: [] for i in range(self.population, pop_tot)}
         self.cluster_ticks = {i: 0 for i in range(self.population, pop_tot)}
+        self.other_cluster_ticks = {i: 0 for i in range(self.population, pop_tot)}
         
         #Initialize attributes for PettingZoo Env
         self.agents = self.possible_agents[:]
