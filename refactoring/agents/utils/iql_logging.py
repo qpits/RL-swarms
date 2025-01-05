@@ -54,3 +54,13 @@ def episode_log(data):
 def actions_log(data):
     actions_ep = list(data.actions_dict[str(data.episode)].values())
     return {action: val for action, val in zip(data.environment.actions, actions_ep)}
+
+def avg_neigh_others_count_log(data):
+    others_count = np.zeros(data.environment.n_chemicals, dtype=np.int32)
+    for agent_id, agent in data.environment.learners.items():
+        neighbours = [data.environment.patches[p]['turtles'] for p in data.environment.cluster_patches[agent['pos']]]
+        neighbours = functools.reduce(operator.iconcat, neighbours, [])
+        for nb in neighbours:
+            others_count[agent['type']] += agent['type'] != data.environment.learners[nb]['type']
+    avg_others_count = others_count / np.array(data.environment.learner_population)
+    return {f"avg_others_count_{i}": val for i, val in enumerate(avg_others_count)}

@@ -81,7 +81,7 @@ def create_agent(params: dict, l_params: dict, n_obs, n_actions, train):
 
 def create_logger(curdir, params, l_params, log_params, train, weights_path=None):
     from agents.utils.better_logger import BetterLogger
-    from agents.utils.iql_logging import avg_reward_log, avg_cluster_log, epsilon_log, avg_neighbourhood_entropy_log, episode_log, actions_log
+    from agents.utils.iql_logging import avg_reward_log, avg_cluster_log, epsilon_log, avg_neighbourhood_entropy_log, episode_log, actions_log, avg_neigh_others_count_log
     log_every = log_params["train_log_every"] if train else log_params["test_log_every"]
     deep_algo = log_params["deep_algorithm"] 
     buffer_size = log_params["buffer_size"]
@@ -96,9 +96,9 @@ def create_logger(curdir, params, l_params, log_params, train, weights_path=None
         weights_file=weights_path
     )
     if train:
-        log.loggers.extend([episode_log, avg_reward_log, avg_cluster_log, actions_log, epsilon_log, avg_neighbourhood_entropy_log])
+        log.loggers.extend([episode_log, avg_reward_log, avg_cluster_log, actions_log, epsilon_log, avg_neighbourhood_entropy_log, avg_neigh_others_count_log])
     else:
-        log.loggers.extend([episode_log, avg_reward_log, avg_cluster_log, actions_log, avg_neighbourhood_entropy_log])
+        log.loggers.extend([episode_log, avg_reward_log, avg_cluster_log, actions_log, avg_neighbourhood_entropy_log, avg_neigh_others_count_log])
     return log, log_every
 
 def main(args):
