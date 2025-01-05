@@ -316,7 +316,9 @@ class SlimeMultipleChem(AECEnv):
                 weights = None
             else:
                 # very simple: if we want to follow the minimum, just take the complementary probabilities
-                weights = (-1. * max_grad)*(pheromones / np.sum(pheromones)) + (1.0 * max_grad)
+                weights = np.sign(1. - 2.* (not max_grad))*(pheromones / np.sum(pheromones)) + (1.0 * (not max_grad))
+                # might need to re-norm
+                weights /= np.sum(weights)
             selected = self._np_rng.choice(len(smell_patches_here), p=weights)
             max_ph = pheromones[selected]
             winner_patch = smell_patches_here[selected]
