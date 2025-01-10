@@ -34,9 +34,13 @@ class SlimeMultipleChem(AECEnv):
             if isinstance(self.observation_space('0'), MultiBinary):
                 return self.observation_space('0').n
             elif isinstance(self.observation_space('0'), Box):
-                # observe maximum for agent's pheromone type and for the sum of all other types
-                # include also the case in which there is NO pheromone, so no maximum.
-                return (self.observation_space('0').shape[0] + 1) ** 2
+                if self.obs_type == "exp":
+                    return 15
+                elif self.obs_type == "paper":
+                    # observe maximum for agent's pheromone type and for the sum of all other types
+                    # include also the case in which there is NO pheromone, so no maximum.
+                    return (self.observation_space('0').shape[0] + 1) ** 2
+                    
 
     def actions_n(self, same_actions=True):
         if same_actions:
@@ -179,7 +183,7 @@ class SlimeMultipleChem(AECEnv):
         self.obs_type = kwargs['obs_type']
         # DOC obervation is an array of 8 real elements.
         # This array indicates the pheromone values in the 8 patches around the agent.
-        if self.obs_type == "paper":
+        if self.obs_type == "paper" or self.obs_type == "exp":
             self._observation_spaces = {
                 a: Box(low=0.0, high=np.inf, shape=(8,self.n_chemicals), dtype=np.float32)
                 for a in self.possible_agents
@@ -201,13 +205,15 @@ class SlimeMultipleChem(AECEnv):
         # special case to handle 2 types of pheromone in some conditions. for performance reasons
         # avoid applying heavy numpy functions that would do nothing to 1-D arrays
         if self.n_chemicals == 2:
-            self.__other_pheromones_get = lambda ph, ph_type: ph[1 - ph_type]
+            self.__other_pheromones_get = lambda ph, ph_type: np.mean(ph[1 - ph_type])
         else:
-            self.__other_pheromones_get = lambda ph, ph_type: np.sum(np.delete(ph, ph_type))
+            self.__other_pheromones_get = lambda ph, ph_type: np.mean(np.sum(np.delete(ph, ph_type)))
 
         # experimental
         self.pen_mod = kwargs['pen_mod']
-        self.conc_threshold = kwargs['conc_threshold']
+        #self.conc_threshold = kwargs['conc_threshold']
+
+        self.__eps = np.finfo(np.float64).eps
     
     def get_learner_population(self):
         """
@@ -351,6 +357,8 @@ class SlimeMultipleChem(AECEnv):
                 self._follow_other_pheromone(agent)
             case 'run_away_other_pheromone':
                 self._run_away_other_pheromone(agent)
+            case 'lay_and_walk':
+                self._lay_and_walk(agent)
             case _:
                 raise ValueError("Action out of range!")
     
@@ -361,16 +369,26 @@ class SlimeMultipleChem(AECEnv):
             turtle['pos'] = target_patch
             self.patches[target_patch]['turtles'].append(agent)
 
+    def _lay_and_walk(self, agent):
+        self._lay_pheromone(agent)
+        self._walk(agent)
+
     def _walk(self, agent):
         """
         Move in random direction (8 sorrounding cells)
         """
         turtle = self.learners[agent]
-        choice = [self.patch_size, -self.patch_size, 0]
+        choice = [(self.patch_size, -self.patch_size),
+                  (self.patch_size, 0),
+                  (self.patch_size, self.patch_size),
+                  (-self.patch_size, -self.patch_size),
+                  (-self.patch_size, 0),
+                  (-self.patch_size, self.patch_size),
+                  (0, -self.patch_size),
+                  (0, self.patch_size)]
         x, y = turtle['pos']
         self.patches[turtle['pos']]['turtles'].remove(agent)
-        x_rnd = np.random.choice(choice)
-        y_rnd = np.random.choice(choice)
+        x_rnd, y_rnd = choice[self._np_rng.integers(8)]
         x2, y2 = x + x_rnd, y + y_rnd
         x2, y2 = self._wrap(x2, y2)
         
@@ -451,7 +469,7 @@ class SlimeMultipleChem(AECEnv):
         cluster = self._compute_cluster(self.agent)
 
         if self.reward_type == "cluster":
-            cluster_ticks, rewards_cust, cur_reward = self.reward_cluster_and_time_punish_time_and_other_clustertime_acc(
+            cluster_ticks, rewards_cust, cur_reward = self.reward_cluster_and_time_punish_time_and_other_clustertime_spot(
                 cluster_ticks,
                 rewards_cust,
                 cluster
@@ -463,7 +481,7 @@ class SlimeMultipleChem(AECEnv):
                 cluster
             )
         
-        if self.obs_type == "paper":
+        if self.obs_type == "paper" or self.obs_type == "exp":
             #_, max_coords = self._find_max_pheromone(self.learners[self.agent]['pos'])
             #observations = np.array(max_coords)
             observations = self._get_obs(self.learners[self.agent])
@@ -484,7 +502,6 @@ class SlimeMultipleChem(AECEnv):
             for r in range(pos[0] - self.patch_size, pos[0] + 2 * self.patch_size, self.patch_size)
             for c in range(pos[1] - self.patch_size, pos[1] + 2 * self.patch_size, self.patch_size)
         ]
-        field_of_view.remove(pos)
         obs = np.array([self.patches[f]["chemical"] for f in field_of_view])
         return obs
 
@@ -493,30 +510,38 @@ class SlimeMultipleChem(AECEnv):
         This method returns the conversion of the observation to an integer.
         It's useful for IQL.
         """
+        chem_type = self.learners[agent]['type']
+        obs = obs.transpose(1,0)
         if self.obs_type == "paper":
-            chem_type = self.learners[agent]['type']
             n_patches = obs.shape[0] + 1   # number of patches observed + case of no pheromone
-            obs = obs.transpose(1,0)
             own_chem_obs = obs[chem_type]
             other_chem_obs = self.__other_pheromones_get(obs, chem_type)
             # mask pheromones in case relative concentration drops below a threshold
             # avoid division by zero!
-            eps = np.finfo(obs.dtype).eps
             # should be sufficient to avoid any strange behaviour and get 1. when both are 0.
-            own_over_other = (own_chem_obs + eps) / (other_chem_obs + eps)
-            other_over_own = 1./own_over_other
-            own_chem_obs[own_over_other < self.conc_threshold] = 0.
-            other_chem_obs[other_over_own < self.conc_threshold] = 0.
+            #own_over_other = (own_chem_obs + self.__eps) / (other_chem_obs + self.__eps)
+            #other_over_own = 1./own_over_other
+            #own_chem_obs[own_over_other < self.conc_threshold] = 0.
+            #other_chem_obs[other_over_own < self.conc_threshold] = 0.
             if np.unique(own_chem_obs).shape[0] == 1:
+                #self._np_rng.integers(8)
                 max_own = 8
             else:
                 max_own = np.argmax(own_chem_obs).item()
             if np.unique(other_chem_obs).shape[0] == 1:
+                #self._np_rng.integers(8)
                 max_other = 8
             else:
                 max_other = np.argmax(other_chem_obs).item()
                 # found the id of the cell with max of "own" pheromone and id of cell with max of "other" -> get single id by "flattening" to the 64 possible combinations
             obs_id = max_own + n_patches*max_other
+        elif self.obs_type == "exp":
+            own_chem_obs = np.mean(obs[chem_type])
+            other_chem_obs = self.__other_pheromones_get(obs, chem_type)
+            # experimental: get state based on ratio of chemicals in the neighbourhood
+            # modify also considering the total amount!
+            ratio = (own_chem_obs + self.__eps) / (other_chem_obs + self.__eps) # avoid zero div
+            obs_id = np.round(4*(1. - np.exp(-ratio))).astype(int) + 3*(np.round(2*(1. - np.exp(-np.mean(obs)/6.0)).astype(int)))
         elif self.obs_type == "variation_1":
             obs_id = int(f"{obs[0].astype(np.uint8)}{obs[1].astype(np.uint8)}", 2)
         return obs_id
@@ -891,11 +916,33 @@ class SlimeMultipleChem(AECEnv):
         cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
                      (cluster / self.cluster_threshold) * (self.reward ** 2) + \
                      (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty) + \
-                     n_others * self.penalty
+                     n_others * (n_others >= self.cluster_threshold) * self.penalty
 
         rewards_cust[self.agent].append(cur_reward)
         return cluster_ticks, rewards_cust, cur_reward
+    def reward_cluster_and_time_punish_time_and_other_clustertime_spot(self, cluster_ticks, rewards_cust, cluster):
+        """
+        Clustering reward that gives a penalty based on ticks spent with any agents of different type in neighbourhood. Resets ticks to zero when out of trouble!
+        """
+        if cluster >= self.cluster_threshold:
+            cluster_ticks[self.agent] += 1
 
+        pos = self.learners[self.agent]['pos']
+        ph_type = self.learners[self.agent]['type']
+        n_others = 0
+        for p in self.cluster_patches[pos]:
+            for turtle in self.patches[p]['turtles']:
+                n_others += (self.learners[turtle]['type'] != ph_type)
+
+        self.other_cluster_ticks[self.agent] = (self.other_cluster_ticks[self.agent] + 1)*(n_others >= self.cluster_threshold) 
+
+        cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
+                     (cluster / self.cluster_threshold) * (self.reward ** 2) + \
+                     (((self.episode_ticks - cluster_ticks[self.agent]) / self.episode_ticks) * self.penalty) + \
+                     (self.other_cluster_ticks[self.agent] / self.episode_ticks) * self.pen_mod * self.penalty
+
+        rewards_cust[self.agent].append(cur_reward)
+        return cluster_ticks, rewards_cust, cur_reward
     def reward_cluster_and_time_punish_time_and_other_clustertime(self, cluster_ticks, rewards_cust, cluster):
         """
         Clustering reward that gives a penalty based on ticks spent with any agents of different type in neighbourhood
@@ -910,7 +957,7 @@ class SlimeMultipleChem(AECEnv):
             for turtle in self.patches[p]['turtles']:
                 n_others += (self.learners[turtle]['type'] != ph_type)
 
-        self.other_cluster_ticks[self.agent] += n_others > 0
+        self.other_cluster_ticks[self.agent] += n_others >= self.cluster_threshold
 
         cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
                      (cluster / self.cluster_threshold) * (self.reward ** 2) + \
@@ -935,7 +982,7 @@ class SlimeMultipleChem(AECEnv):
             for turtle in self.patches[p]['turtles']:
                 n_others += (self.learners[turtle]['type'] != ph_type)
         
-        self.other_cluster_ticks[self.agent] += 1 - 2 * (n_others > 0)
+        self.other_cluster_ticks[self.agent] += -1 + 2 * (n_others > self.cluster_threshold)
 
         cur_reward = (cluster_ticks[self.agent] / self.episode_ticks) * self.reward + \
                      (cluster / self.cluster_threshold) * (self.reward ** 2) + \
@@ -995,7 +1042,7 @@ class SlimeMultipleChem(AECEnv):
         for p in self.patches:
             self.patches[p]['chemical'][:] = 0.0
 
-        if self.obs_type == "paper":
+        if self.obs_type == "paper" or self.obs_type == "exp":
             #self.observations = {
             #    a: np.array(self.learners[int(a)]['pos'])
             #    for a in self.agents
